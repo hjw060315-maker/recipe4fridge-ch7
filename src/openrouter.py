@@ -6,6 +6,19 @@ API_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODELS_URL = "https://openrouter.ai/api/v1/models"
 
 
+def extract_content(body):
+    """채팅 응답 본문에서 첫 choice의 message.content 문자열을 꺼낸다.
+
+    choices가 비었거나 message/content가 없거나 content가 null(빈 답)·문자열이 아니면
+    None을 돌려준다. 모델이 content를 비워 보내도 TypeError/KeyError로 멈추지 않게 한다.
+    """
+    try:
+        content = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    return content if isinstance(content, str) else None
+
+
 def _trim_model_entry(m):
     """화면/필터에서 실제로 쓰는 필드만 남긴다."""
     architecture = m.get("architecture") or {}

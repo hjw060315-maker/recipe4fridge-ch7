@@ -8,6 +8,7 @@ import requests
 from openrouter import (
     API_URL,
     MODELS_URL,
+    extract_content,
     fetch_free_models_payload,
     is_daily_limit_response,
     should_wait_before_next,
@@ -178,12 +179,10 @@ def generate_recipes(ingredient_names, api_key, on_attempt=None, attempts=3, all
         used_model = model
         if response.status_code == 200:
             try:
-                body = response.json()
-                choices = body.get("choices")
-                if choices:
-                    recipes = parse_recipes(choices[0]["message"]["content"])
-                    if recipes and _is_korean_enough(recipes):
-                        break
+                # content가 null(빈 답)이어도 멈추지 않고 실패로 보아 다음 모델로 넘어간다.
+                recipes = parse_recipes(extract_content(response.json()))
+                if recipes and _is_korean_enough(recipes):
+                    break
             except ValueError:
                 pass
         if is_daily_limit_response(response):
@@ -207,6 +206,8 @@ def _is_korean_enough(recipes):
 
 
 def parse_recipes(content):
+    if not isinstance(content, str):
+        return None
     match = re.search(r"\{.*\}", content, re.DOTALL)
     if not match:
         return None

@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 import db
 from auth_ui import current_user, render_sidebar_auth
+from openrouter import extract_content
 from recipe import (
     CUISINE_OPTIONS,
     DIFFICULTY_OPTIONS,
@@ -342,7 +343,7 @@ if wizard_step == 1:
                         st.session_state.recognition_error = "❌ 식재료 인식 실패: 모델 응답 형식이 올바르지 않습니다 (choices 없음). 잠시 후 다시 시도해주세요."
                         st.session_state.recognition_error_detail = response.text
                     else:
-                        content = choices[0]["message"]["content"]
+                        content = extract_content(body) or ""
                         ingredients = parse_ingredients(content)
                         if ingredients is None:
                             st.session_state.recognition_error = "❌ 식재료 인식 실패: 서로 다른 모델 3차 시도 모두 응답을 재료 목록으로 변환하지 못했습니다."
@@ -522,7 +523,7 @@ elif wizard_step == 3:
                     with st.expander("자세히 보기 (기술 정보)"):
                         st.code(response.text)
                 else:
-                    content = choices[0]["message"]["content"]
+                    content = extract_content(body) or ""
                     recipes = parse_recipes(content)
                     if not recipes:
                         st.session_state.pop("recipes", None)

@@ -12,6 +12,7 @@ from PIL import Image
 from openrouter import (
     API_URL,
     MODELS_URL,
+    extract_content,
     fetch_free_models_payload,
     is_daily_limit_response,
     should_wait_before_next,
@@ -184,9 +185,8 @@ def recognize_ingredients(data_uri, api_key, on_attempt=None, attempts=3, allowe
         used_model = model
         if response.status_code == 200:
             try:
-                body = response.json()
-                choices = body.get("choices")
-                if choices and parse_ingredients(choices[0]["message"]["content"]) is not None:
+                # content가 null(빈 답)이어도 멈추지 않고 실패로 보아 다음 모델로 넘어간다.
+                if parse_ingredients(extract_content(response.json())) is not None:
                     break
             except ValueError:
                 pass
@@ -223,6 +223,8 @@ def parse_ingredients(content):
     수량 1, 단위 "개"로 채워 동일한 형태로 반환한다 (하위 호환).
     동일한 이름의 재료가 중복 인식된 경우 수량을 합쳐 하나로 정리한다.
     """
+    if not isinstance(content, str):
+        return None
     match = re.search(r"\[.*\]", content, re.DOTALL)
     if not match:
         return None
