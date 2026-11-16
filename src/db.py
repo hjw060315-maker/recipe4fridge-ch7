@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -48,6 +49,18 @@ def _connection_pool():
     )
 
 
+# 마지막으로 쿼리에 성공한 뒤 이 시간(초) 안에 다시 꺼낸 커넥션은 SELECT 1 확인을 생략한다.
+# Supabase까지 왕복이 약 300ms라, 쿼리마다 확인하면 DB 호출 시간이 두 배가 된다.
+# 커넥션이 통째로 죽는 상황(앱 컨테이너가 잠들었다 깨어남)은 이보다 훨씬 긴 공백 뒤에 생긴다.
+_PING_SKIP_SECONDS = 60
+_last_ok_at = {}  # id(conn) -> 마지막으로 쿼리에 성공한 시각(time.monotonic)
+
+
+def _recently_ok(conn):
+    last = _last_ok_at.get(id(conn))
+    return conn.closed == 0 and last is not None and time.monotonic() - last < _PING_SKIP_SECONDS
+
+
 def _checkout_live_connection():
     """풀에서 살아있는 커넥션을 꺼낸다. 죽어있으면 풀을 통째로 버리고 새로 만든다.
 
@@ -58,6 +71,13 @@ def _checkout_live_connection():
         pool = _connection_pool()
         conn = pool.getconn()
         try:
+            if not conn.autocommit:
+                # 이 모듈의 쿼리 블록은 init_db(멱등 DDL)를 빼면 모두 SQL 한 문장이다.
+                # autocommit이 아니면 psycopg2가 BEGIN과 COMMIT을 따로 보내 왕복이 3번이 되므로,
+                # autocommit으로 1번에 끝낸다 (풀에서 돌아온 커넥션은 트랜잭션이 없어 바로 설정 가능).
+                conn.autocommit = True
+            if _recently_ok(conn):
+                return pool, conn
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
             return pool, conn
@@ -77,6 +97,11 @@ def get_connection():
     try:
         yield conn
         conn.commit()
+        _last_ok_at[id(conn)] = time.monotonic()
+    except BaseException:
+        # 실패한 커넥션은 다음에 꺼낼 때 다시 SELECT 1로 확인하게 한다.
+        _last_ok_at.pop(id(conn), None)
+        raise
     finally:
         # putconn은 트랜잭션이 남아있으면 롤백하고, 끊어진 커넥션은 닫아 풀에서 제거한다.
         pool.putconn(conn)

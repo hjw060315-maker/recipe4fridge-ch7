@@ -7,11 +7,16 @@ import time
 import uuid
 
 import requests
-import streamlit as st
 from PIL import Image
 
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODELS_URL = "https://openrouter.ai/api/v1/models"
+from openrouter import (
+    API_URL,
+    MODELS_URL,
+    fetch_free_models_payload,
+    is_daily_limit_response,
+    should_wait_before_next,
+)
+
 MAX_IMAGE_DIMENSION = 1024
 UNIT_OPTIONS = ["개", "병", "봉지", "팩", "단", "g", "kg", "ml", "L", "기타"]
 RECOGNITION_PROMPT = (
@@ -46,16 +51,8 @@ PREFERRED_VISION_MODELS = [
     "google/gemma-4-31b-it:free",
 ]
 
-@st.cache_data(ttl=300, show_spinner=False)
-def _fetch_models_payload():
-    """오픈라우터 모델 목록 원본을 5분간 캐시한다.
-
-    실패하면 예외를 그대로 올려서 실패 결과가 캐시에 남지 않게 한다
-    (일시적인 네트워크 오류가 5분 동안 굳어지지 않도록).
-    """
-    response = requests.get(MODELS_URL, timeout=10)
-    response.raise_for_status()
-    return response.json().get("data", [])
+# 모델 목록 캐시는 recipe.py와 공유한다 (openrouter.fetch_free_models_payload).
+_fetch_models_payload = fetch_free_models_payload
 
 
 def _fetch_free_vision_model_entries():
@@ -125,7 +122,11 @@ def list_free_vision_models_detailed():
 
 def to_resized_data_uri(file_like):
     """이미지를 긴 변 기준 MAX_IMAGE_DIMENSION 이하로 축소해 base64 data URI로 변환한다."""
-    image = Image.open(file_like).convert("RGB")
+    image = Image.open(file_like)
+    # JPEG는 디코딩 단계에서 1/2·1/4·1/8로 줄여 읽는다(목표 크기 이상은 유지). 전체 해상도로
+    # 디코딩·RGB 변환한 뒤 줄이는 것보다 빠르다. JPEG가 아니면 아무 일도 하지 않는다.
+    image.draft("RGB", (MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION))
+    image = image.convert("RGB")
     image.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION))
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=85)
@@ -189,7 +190,10 @@ def recognize_ingredients(data_uri, api_key, on_attempt=None, attempts=3, allowe
                     break
             except ValueError:
                 pass
-        if i < len(models) - 1:
+        if is_daily_limit_response(response):
+            # 계정 일일 한도 소진은 모델을 바꿔도 같은 429가 나므로 남은 시도를 생략한다.
+            break
+        if i < len(models) - 1 and should_wait_before_next(response, model, models[i + 1]):
             # 429는 모델별 순간 혼잡이라 1초로는 잘 풀리지 않는다. 시도마다 대기를 늘린다.
             time.sleep(2 * (i + 1))
     return response, used_model
